@@ -306,8 +306,8 @@ export class Douyin extends plugin {
               await e.reply(segment.video(finalVideoPath));
           }
         } else {
-            await e.reply(`标题：${videoTitle}`);
-            await common.sleep(500);
+            //await e.reply(`标题：${videoTitle}`);
+            //await common.sleep(500);
             await e.reply(segment.video(finalVideoPath));
         }
         
