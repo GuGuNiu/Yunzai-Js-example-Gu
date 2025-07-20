@@ -1,4 +1,5 @@
 import fetch from 'node-fetch';
+import { segment } from 'oicq'; 
 import common from "../../lib/common/common.js";
 import fs from "fs/promises";
 import path from "path";
@@ -160,6 +161,8 @@ export class Douyin extends plugin {
 
   async _findInCache(cacheKey) {
     if (!cacheKey) return null;
+    const path200p = path.join(this.cachePath, `${cacheKey}_200p.mp4`);
+    try { await fs.access(path200p); return path200p; } catch (error) {}
     const path240p = path.join(this.cachePath, `${cacheKey}_240p.mp4`);
     try { await fs.access(path240p); return path240p; } catch (error) {}
     const path360p = path.join(this.cachePath, `${cacheKey}_360p.mp4`);
@@ -247,6 +250,8 @@ export class Douyin extends plugin {
         if (!rawVideoPath) throw new Error('视频下载或保存至本地缓存失败');
 
         let finalVideoPath = rawVideoPath;
+        let originalFilePathToDelete = null;
+
         const stats = await fs.stat(rawVideoPath);
         const fileSizeInMB = stats.size / (1024 * 1024);
 
@@ -264,15 +269,34 @@ export class Douyin extends plugin {
                 try {
                     await this.compress(rawVideoPath, compressedPath, targetHeight);
                     finalVideoPath = compressedPath;
-                    await fs.unlink(rawVideoPath);
+                    originalFilePathToDelete = rawVideoPath;
+
+                    const statsAfterCompress = await fs.stat(finalVideoPath);
+                    const sizeAfterCompressMB = statsAfterCompress.size / (1024 * 1024);
+
+                    if (sizeAfterCompressMB > 20 && sizeAfterCompressMB < 30) {
+                        //this.logger.info(`${logger_Prefix} 二次压缩: 文件大小 (${sizeAfterCompressMB.toFixed(2)}MB) 仍在 20-30MB 范围内，将压缩至 200p...`);
+                        const secondaryTargetHeight = 200;
+                        const secondaryCompressedPath = path.join(this.cachePath, `${cacheKey}_${secondaryTargetHeight}p.mp4`);
+                        
+                        const intermediateFile = finalVideoPath; 
+
+                        await this.compress(intermediateFile, secondaryCompressedPath, secondaryTargetHeight);
+                        finalVideoPath = secondaryCompressedPath;
+                        await fs.unlink(intermediateFile); 
+                    }
                 } catch (compressError) {
-                    this.logger.error(`${logger_Prefix} 压缩失败，将尝试发送原始文件。`);
+                    this.logger.error(`${logger_Prefix} 压缩过程中失败，将尝试发送原始文件。`);
+                    finalVideoPath = rawVideoPath; 
+                    originalFilePathToDelete = null; 
                 }
-            } else {
-                //await e.reply("FFmpeg 环境异常且无法自动修复，将尝试发送原始文件。", true);
             }
         }
         
+        if(originalFilePathToDelete) {
+          await fs.unlink(originalFilePathToDelete).catch(err => this.logger.error(`${logger_Prefix} 清理原始大文件失败:`, err));
+        }
+
         const videoTitle = videoData.title || '无标题';
         
         const finalStats = await fs.stat(finalVideoPath);
@@ -281,10 +305,7 @@ export class Douyin extends plugin {
         if (finalSizeInMB > this.splitThreshold) {
           const ffmpegReady = await this._ensureFfmpeg(e);
           if (ffmpegReady) {
-              //this.logger.info(`${logger_Prefix} 最终文件大小 (${finalSizeInMB.toFixed(2)}MB) 超出切片阈值，开始切片并合并转发...`);
-              //await e.reply(`标题：${videoTitle}\n视频过大，正在分段处理...`, true);
               const chunks = await this._splitVideo(finalVideoPath, this.cachePath);
-
               if (chunks && chunks.length > 0) {
                   const forwardNodes = chunks.map((chunkPath, index) => ({
                       user_id: e.self_id,
@@ -306,8 +327,6 @@ export class Douyin extends plugin {
               await e.reply(segment.video(finalVideoPath));
           }
         } else {
-            //await e.reply(`标题：${videoTitle}`);
-            //await common.sleep(500);
             await e.reply(segment.video(finalVideoPath));
         }
         
